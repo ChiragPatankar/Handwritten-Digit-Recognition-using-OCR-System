@@ -1,5 +1,9 @@
 import sys
-sys.path.insert(0, r'C:\tf')  # Add custom TensorFlow installation path
+import os
+
+# Add custom TensorFlow installation path only for local Windows environment
+if os.name == 'nt' and os.path.exists(r'C:\tf'):
+    sys.path.insert(0, r'C:\tf')
 
 import streamlit as st
 import cv2
