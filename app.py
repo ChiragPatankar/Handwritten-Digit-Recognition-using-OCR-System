@@ -9,8 +9,14 @@ import streamlit as st
 import cv2
 import numpy as np
 from tensorflow.keras import models
+from tensorflow.keras.datasets import mnist
 from PIL import Image
 import io
+import pandas as pd
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Set page configuration
 st.set_page_config(
@@ -26,6 +32,50 @@ def load_model_cached():
     """Load the model once and cache it"""
     model = models.load_model(MODEL_PATH, compile=False)
     return model
+
+@st.cache_data
+def evaluate_model_performance():
+    """Evaluate model on MNIST test set and cache results"""
+    try:
+        # Load model
+        model = load_model_cached()
+        
+        # Load MNIST test data
+        (_, _), (x_test, y_test) = mnist.load_data()
+        x_test = x_test.reshape(x_test.shape[0], 28, 28, 1).astype('float32') / 255.0
+        
+        # Make predictions on a subset for faster evaluation (or full set if you want)
+        # Use full test set for accurate metrics
+        predictions = model.predict(x_test, verbose=0)
+        y_pred = np.argmax(predictions, axis=1)
+        
+        # Calculate metrics
+        accuracy = accuracy_score(y_test, y_pred) * 100
+        precision = precision_score(y_test, y_pred, average='weighted') * 100
+        recall = recall_score(y_test, y_pred, average='weighted') * 100
+        f1 = f1_score(y_test, y_pred, average='weighted') * 100
+        
+        # Confusion matrix
+        cm = confusion_matrix(y_test, y_pred)
+        
+        # Per-class accuracy
+        per_class_acc = {}
+        for i in range(10):
+            class_correct = cm[i, i]
+            class_total = cm[i, :].sum()
+            per_class_acc[i] = (class_correct / class_total) * 100
+        
+        return {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1,
+            'confusion_matrix': cm,
+            'per_class_accuracy': per_class_acc
+        }
+    except Exception as e:
+        st.error(f"Error evaluating model: {e}")
+        return None
 
 def preprocess_image(image):
     """Preprocess the uploaded image for prediction"""
@@ -60,16 +110,175 @@ def main():
     st.markdown("""
     ### MNIST Digit Classifier
     Upload an image of a handwritten digit (0-9) and the model will predict what digit it is!
-    
-    **Model Accuracy:** 99%+ on MNIST test dataset
     """)
     
     # Load model
     with st.spinner("Loading model..."):
         model = load_model_cached()
     
-    # File uploader
+    # Create tabs for different sections
+    tab1, tab2 = st.tabs(["🎯 Predict Digits", "📊 Model Performance"])
+    
+    with tab2:
+        display_model_metrics()
+    
+    with tab1:
+        predict_digit_interface(model)
+    
+def display_model_metrics():
+    """Display model performance metrics"""
+    st.header("📊 Model Performance Metrics")
+    st.markdown("Real-time evaluation on MNIST test dataset (10,000 images)")
+    
+    with st.spinner("Evaluating model performance..."):
+        metrics = evaluate_model_performance()
+    
+    if metrics is None:
+        st.error("Failed to evaluate model. Please check if the model file exists.")
+        return
+    
+    # Display overall metrics in columns
+    st.subheader("Overall Performance")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            label="🎯 Accuracy",
+            value=f"{metrics['accuracy']:.2f}%",
+            delta=None
+        )
+    
+    with col2:
+        st.metric(
+            label="🎪 Precision",
+            value=f"{metrics['precision']:.2f}%",
+            delta=None
+        )
+    
+    with col3:
+        st.metric(
+            label="📈 Recall",
+            value=f"{metrics['recall']:.2f}%",
+            delta=None
+        )
+    
+    with col4:
+        st.metric(
+            label="⚖️ F1 Score",
+            value=f"{metrics['f1_score']:.2f}%",
+            delta=None
+        )
+    
     st.markdown("---")
+    
+    # Create two columns for visualizations
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.subheader("Confusion Matrix")
+        # Create confusion matrix heatmap using plotly
+        cm = metrics['confusion_matrix']
+        
+        fig = go.Figure(data=go.Heatmap(
+            z=cm,
+            x=[str(i) for i in range(10)],
+            y=[str(i) for i in range(10)],
+            colorscale='Blues',
+            text=cm,
+            texttemplate='%{text}',
+            textfont={"size": 12},
+            colorbar=dict(title="Count")
+        ))
+        
+        fig.update_layout(
+            title="Confusion Matrix",
+            xaxis_title="Predicted Label",
+            yaxis_title="True Label",
+            width=400,
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col_right:
+        st.subheader("Per-Class Accuracy")
+        # Create bar chart for per-class accuracy
+        per_class_df = pd.DataFrame({
+            'Digit': list(metrics['per_class_accuracy'].keys()),
+            'Accuracy (%)': list(metrics['per_class_accuracy'].values())
+        })
+        
+        fig = px.bar(
+            per_class_df,
+            x='Digit',
+            y='Accuracy (%)',
+            text='Accuracy (%)',
+            color='Accuracy (%)',
+            color_continuous_scale='Viridis',
+            range_color=[90, 100]
+        )
+        
+        fig.update_traces(
+            texttemplate='%{text:.2f}%',
+            textposition='outside'
+        )
+        
+        fig.update_layout(
+            xaxis_title="Digit",
+            yaxis_title="Accuracy (%)",
+            yaxis_range=[0, 105],
+            showlegend=False,
+            width=400,
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Detailed metrics table
+    st.markdown("---")
+    st.subheader("Detailed Per-Class Metrics")
+    
+    # Create detailed table
+    detailed_data = []
+    cm = metrics['confusion_matrix']
+    for i in range(10):
+        class_correct = cm[i, i]
+        class_total = cm[i, :].sum()
+        class_accuracy = metrics['per_class_accuracy'][i]
+        detailed_data.append({
+            'Digit': i,
+            'Correct Predictions': class_correct,
+            'Total Samples': class_total,
+            'Accuracy (%)': f"{class_accuracy:.2f}%"
+        })
+    
+    detailed_df = pd.DataFrame(detailed_data)
+    st.dataframe(detailed_df, use_container_width=True, hide_index=True)
+    
+    # Summary statistics
+    st.markdown("---")
+    st.subheader("📈 Summary Statistics")
+    col1, col2, col3 = st.columns(3)
+    
+    accuracies = list(metrics['per_class_accuracy'].values())
+    
+    with col1:
+        best_digit = max(metrics['per_class_accuracy'].items(), key=lambda x: x[1])
+        st.info(f"**Best Performing Digit:** {best_digit[0]} ({best_digit[1]:.2f}%)")
+    
+    with col2:
+        worst_digit = min(metrics['per_class_accuracy'].items(), key=lambda x: x[1])
+        st.warning(f"**Most Challenging Digit:** {worst_digit[0]} ({worst_digit[1]:.2f}%)")
+    
+    with col3:
+        avg_accuracy = sum(accuracies) / len(accuracies)
+        st.success(f"**Average Class Accuracy:** {avg_accuracy:.2f}%")
+
+def predict_digit_interface(model):
+    """Interface for predicting uploaded digits"""
+    st.markdown("### Upload Your Image")
+    
+    # File uploader
     uploaded_file = st.file_uploader(
         "Choose an image file",
         type=['jpg', 'jpeg', 'png', 'bmp'],
@@ -139,6 +348,10 @@ def main():
         st.markdown("---")
         st.subheader("🖼️ Try these sample images:")
         st.markdown("You can find sample images in the `assets/images/` folder!")
+        
+        # Add a note about model performance
+        st.markdown("---")
+        st.info("💡 **Tip:** Check the 'Model Performance' tab to see detailed accuracy metrics!")
 
 if __name__ == "__main__":
     main()
